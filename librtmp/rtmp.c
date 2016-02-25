@@ -674,7 +674,11 @@ parseAMF(AMFObject *obj, AVal *av, int *depth)
 	  break;
 	case 'O':
 	  i = atoi(p);
-	  if (i)
+	  if (i == 2)
+	    {
+	      prop.p_type = AMF_ECMA_ARRAY;
+	    }
+	  else if (i)
 	    {
 	      prop.p_type = AMF_OBJECT;
 	    }
@@ -732,7 +736,7 @@ parseAMF(AMFObject *obj, AVal *av, int *depth)
 	}
     }
   AMF_AddProp(obj, &prop);
-  if (prop.p_type == AMF_OBJECT)
+  if (prop.p_type == AMF_OBJECT || prop.p_type == AMF_ECMA_ARRAY)
     (*depth)++;
   return 0;
 }

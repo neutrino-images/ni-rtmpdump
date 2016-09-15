@@ -28,6 +28,7 @@
 #include <string.h>
 #include <assert.h>
 #include <time.h>
+#include <fcntl.h>
 #if defined(USE_OPENSSL) && !defined(_WIN32)
 #include <pthread.h>
 #endif
@@ -939,14 +940,40 @@ RTMP_Connect0(RTMP *r, struct sockaddr * service)
   r->m_sb.sb_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (r->m_sb.sb_socket != -1)
     {
-      if (connect(r->m_sb.sb_socket, service, sizeof(struct sockaddr)) < 0)
+      /* set socket in non blocking mode to manage connection timeout */
+      fcntl(r->m_sb.sb_socket, F_SETFL, O_NONBLOCK);
+      if (connect(r->m_sb.sb_socket, service, sizeof(struct sockaddr)) != 0)
 	{
+          /* connection did not succeeded right away */
 	  int err = GetSockError();
-	  RTMP_Log(RTMP_LOGERROR, "%s, failed to connect socket. %d (%s)",
-	      __FUNCTION__, err, strerror(err));
-	  RTMP_Close(r);
-	  return FALSE;
-	}
+          if (err != EINPROGRESS) {
+            RTMP_Log(RTMP_LOGERROR, "%s, failed to connect socket straight away. %d (%s)",
+                __FUNCTION__, err, strerror(err));
+            RTMP_Close(r);
+            return FALSE;
+          }
+
+          /* block until connection succeed, fail, or timeout */
+          fd_set fdset;
+          FD_ZERO(&fdset);
+          FD_SET(r->m_sb.sb_socket, &fdset);
+          SET_SOCKOPT_TIMEO(selectTv, r->Link.timeout);
+          int selectReturn = select(r->m_sb.sb_socket + 1, NULL, &fdset, NULL, &selectTv);
+          if (selectReturn == -1) {
+              RTMP_Log(RTMP_LOGERROR, "%s, failed to connect socket during select. %d (%s)",
+                  __FUNCTION__, err, strerror(err));
+              RTMP_Close(r);
+              return FALSE;
+          } else if (selectReturn == 0) {
+              /* timeout occured */
+              RTMP_Log(RTMP_LOGERROR, "%s, failed to connect socket. %ds timeout occured",
+                  __FUNCTION__, r->Link.timeout);
+              RTMP_Close(r);
+              return FALSE;
+          }
+    }
+      /* set socket back to blocking mode */
+      fcntl(r->m_sb.sb_socket, F_SETFL, 0);
 
       if (r->Link.socksport)
 	{
@@ -968,12 +995,18 @@ RTMP_Connect0(RTMP *r, struct sockaddr * service)
 
   /* set timeout */
   {
-    SET_RCVTIMEO(tv, r->Link.timeout);
+    SET_SOCKOPT_TIMEO(tv, r->Link.timeout);
     if (setsockopt
         (r->m_sb.sb_socket, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, sizeof(tv)))
       {
-        RTMP_Log(RTMP_LOGERROR, "%s, Setting socket timeout to %ds failed!",
+        RTMP_Log(RTMP_LOGERROR, "%s, Setting socket reception timeout to %ds failed!",
 	    __FUNCTION__, r->Link.timeout);
+      }
+    if (setsockopt
+        (r->m_sb.sb_socket, SOL_SOCKET, SO_SNDTIMEO, (char *)&tv, sizeof(tv)))
+      {
+        RTMP_Log(RTMP_LOGERROR, "%s, Setting socket sending timeout to %ds failed!",
+            __FUNCTION__, r->Link.timeout);
       }
   }
 

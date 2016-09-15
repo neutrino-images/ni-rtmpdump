@@ -177,7 +177,7 @@ HTTP_get(struct HTTP_ctx *http, const char *url, HTTP_read_callback *cb)
   /* set timeout */
 #define HTTP_TIMEOUT	5
   {
-    SET_RCVTIMEO(tv, HTTP_TIMEOUT);
+    SET_SOCKOPT_TIMEO(tv, HTTP_TIMEOUT);
     if (setsockopt
         (sb.sb_socket, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, sizeof(tv)))
       {

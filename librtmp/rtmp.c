@@ -2514,8 +2514,11 @@ b64enc(const unsigned char *input, int length, char *output, int maxsize)
       return 0;
     }
 #elif defined(USE_GNUTLS)
-  if (BASE64_ENCODE_RAW_LENGTH(length) <= maxsize)
-    base64_encode_raw((uint8_t*) output, length, input);
+  if (BASE64_ENCODE_RAW_LENGTH(length) < maxsize)
+    {
+      base64_encode_raw((uint8_t*) output, length, input);
+      output[BASE64_ENCODE_RAW_LENGTH(length)] = '\0';
+    }
   else
     {
       RTMP_Log(RTMP_LOGDEBUG, "%s, error", __FUNCTION__);

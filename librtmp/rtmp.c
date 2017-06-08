@@ -28,6 +28,9 @@
 #include <string.h>
 #include <assert.h>
 #include <time.h>
+#if defined(USE_OPENSSL) && !defined(_WIN32)
+#include <pthread.h>
+#endif
 
 #include "rtmp_sys.h"
 #include "log.h"
@@ -224,6 +227,36 @@ RTMP_LibVersion()
   return RTMP_LIB_VERSION;
 }
 
+#ifdef USE_OPENSSL
+static void
+OpenSSL_Setup()
+{
+  static int initialized = 0;
+
+#ifdef _WIN32
+  #warning FIXME: OpenSSL init is not reentrant
+#else
+  static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+  pthread_mutex_lock(&lock);
+#endif
+
+  if (!initialized) {
+    initialized = 1;
+    SSL_load_error_strings();
+    SSL_library_init();
+    OpenSSL_add_all_digests();
+    RTMP_TLS_ctx = SSL_CTX_new(SSLv23_method());
+    SSL_CTX_set_options(RTMP_TLS_ctx, SSL_OP_ALL);
+    SSL_CTX_set_default_verify_paths(RTMP_TLS_ctx);
+  }
+
+#ifdef _WIN32
+#else
+  pthread_mutex_unlock(&lock);
+#endif
+}
+#endif
+
 void
 RTMP_TLS_Init()
 {
@@ -244,13 +277,7 @@ RTMP_TLS_Init()
   gnutls_certificate_set_x509_trust_file(RTMP_TLS_ctx->cred,
   	"ca.pem", GNUTLS_X509_FMT_PEM);
 #elif !defined(NO_SSL) /* USE_OPENSSL */
-  /* libcrypto doesn't need anything special */
-  SSL_load_error_strings();
-  SSL_library_init();
-  OpenSSL_add_all_digests();
-  RTMP_TLS_ctx = SSL_CTX_new(SSLv23_method());
-  SSL_CTX_set_options(RTMP_TLS_ctx, SSL_OP_ALL);
-  SSL_CTX_set_default_verify_paths(RTMP_TLS_ctx);
+  OpenSSL_Setup();
 #endif
 #endif
 }
@@ -345,6 +372,7 @@ RTMP_Init(RTMP *r)
   r->m_fVideoCodecs = 252.0;
   r->Link.timeout = 30;
   r->Link.swfAge = 30;
+  r->Link.flashVer = RTMP_DefaultFlashVer;
 }
 
 void
@@ -512,8 +540,6 @@ RTMP_SetupStream(RTMP *r,
     }
   if (flashVer && flashVer->av_len)
     r->Link.flashVer = *flashVer;
-  else
-    r->Link.flashVer = RTMP_DefaultFlashVer;
   if (subscribepath && subscribepath->av_len)
     r->Link.subscribepath = *subscribepath;
   if (usherToken && usherToken->av_len)
@@ -3552,7 +3578,6 @@ RTMP_ReadPacket(RTMP *r, RTMPPacket *packet)
   uint8_t hbuf[RTMP_MAX_HEADER_SIZE] = { 0 };
   char *header = (char *)hbuf;
   int nSize, hSize, nToRead, nChunk;
-  int didAlloc = FALSE;
   int extendedTimestamp;
 
   RTMP_Log(RTMP_LOGDEBUG2, "%s: fd=%d", __FUNCTION__, r->m_sb.sb_socket);
@@ -3644,8 +3669,14 @@ RTMP_ReadPacket(RTMP *r, RTMPPacket *packet)
 
       if (nSize >= 6)
 	{
+	  RTMPPacket *channelPacket = r->m_vecChannelsIn[packet->m_nChannel];
+
 	  packet->m_nBodySize = AMF_DecodeInt24(header + 3);
 	  packet->m_nBytesRead = 0;
+
+	  if (channelPacket && channelPacket->m_body == packet->m_body)
+	    channelPacket->m_body = NULL;
+	  RTMPPacket_Free(packet);
 
 	  if (nSize > 6)
 	    {
@@ -3679,7 +3710,6 @@ RTMP_ReadPacket(RTMP *r, RTMPPacket *packet)
 	  RTMP_Log(RTMP_LOGDEBUG, "%s, failed to allocate packet", __FUNCTION__);
 	  return FALSE;
 	}
-      didAlloc = TRUE;
       packet->m_headerType = (hbuf[0] & 0xc0) >> 6;
     }
 
@@ -3711,6 +3741,8 @@ RTMP_ReadPacket(RTMP *r, RTMPPacket *packet)
   /* keep the packet as ref for other packets on this channel */
   if (!r->m_vecChannelsIn[packet->m_nChannel])
     r->m_vecChannelsIn[packet->m_nChannel] = malloc(sizeof(RTMPPacket));
+  else if (r->m_vecChannelsIn[packet->m_nChannel]->m_body != packet->m_body)
+    RTMPPacket_Free(r->m_vecChannelsIn[packet->m_nChannel]);
   memcpy(r->m_vecChannelsIn[packet->m_nChannel], packet, sizeof(RTMPPacket));
   if (extendedTimestamp)
     {
@@ -4210,6 +4242,8 @@ CloseInternal(RTMP *r, int reconnect)
   r->m_msgCounter = 0;
   r->m_resplen = 0;
   r->m_unackd = 0;
+
+  if (r->Link.extras.o_num) AMF_Reset(&r->Link.extras);
 
   if (r->Link.lFlags & RTMP_LF_FTCU && !reconnect)
     {

@@ -32,6 +32,7 @@
 #include <errno.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <limits.h>
 
 #include "amf.h"
 

@@ -62,6 +62,11 @@ static const char *my_dhm_G = "4";
 #include <nettle/md5.h>
 #else	/* USE_OPENSSL */
 #include <openssl/ssl.h>
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+#ifndef RC4_INT
+#define RC4_INT unsigned int
+#endif
+#endif
 #include <openssl/rc4.h>
 #include <openssl/md5.h>
 #include <openssl/bio.h>

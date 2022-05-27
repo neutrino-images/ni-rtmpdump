@@ -56,6 +56,11 @@
 #include <openssl/ssl.h>
 #include <openssl/sha.h>
 #include <openssl/hmac.h>
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+#ifndef RC4_INT
+#define RC4_INT unsigned int
+#endif
+#endif
 #include <openssl/rc4.h>
 #define HMAC_setup(ctx, key, len)	HMAC_CTX_init(&ctx); HMAC_Init_ex(&ctx, (unsigned char *)key, len, EVP_sha256(), 0)
 #define HMAC_crunch(ctx, buf, len)	HMAC_Update(&ctx, (unsigned char *)buf, len)
